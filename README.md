@@ -10,6 +10,10 @@
 <h1 align="center">PhotoCraft Corpus</h1>
 
 <p align="center">
+  <a href="https://sonarcloud.io/project/overview?id=storytold_photocraft-corpus"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+</p>
+
+<p align="center">
   <b>Real-file test oracles for PhotoCraft and the Crafting Apps.</b>
 </p>
 
