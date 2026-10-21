@@ -47,7 +47,7 @@
 **Contents:** [What this is](#what-this-is) · [Using this from PhotoCraft](#using-this-from-photocraft) · [Local layout](#local-layout-authoring-clone-consuming-copy-local-mode) ·
 [Layout](#layout) · [Fetching](#fetching) · [Verifying](#verifying) ·
 [Adding or regenerating files](#adding-or-regenerating-files) · [Pinning](#pinning-workflow) ·
-[Size guidance](#size-guidance) · [`photoshop/`](#photoshop-photoshop-oracle-psds) ·
+[Size guidance](#size-guidance) · [`photoshop/`](#photoshop-photoshop-oracle-psds) · [`gimp/`](#gimp-gimp-xcf-oracles) ·
 [Provenance](#provenance) · [The Crafting Apps](#the-crafting-apps) · [License and credits](#license-and-credits)
 
 ## What this is
@@ -68,6 +68,7 @@ PhotoCraft is the primary consumer. From a PhotoCraft checkout:
 
 ```sh
 cargo xtask corpus --photoshop   # this repo's photoshop/ at the pinned commit -> corpus/photoshop
+cargo xtask corpus --gimp        # this repo's gimp/ at its pinned commit -> corpus/gimp
 cargo xtask corpus --all         # every corpus: this repo's sets plus psd-tools, ag-psd and PngSuite
 cargo xtask corpus               # list where each corpus lives and which commit is pinned
 cargo xtask test-corpus          # fetch everything, then run every corpus test
@@ -78,7 +79,8 @@ cargo xtask test-corpus          # fetch everything, then run every corpus test
 - **The pin:** `PHOTOCRAFT_CORPUS_COMMIT` in
   [`xtask/src/corpus_pins.rs`](https://github.com/storytold/photocraft/blob/main/xtask/src/corpus_pins.rs) (every
   corpus pin is in that one file). The manifest the download is checked against is
-  `xtask/photoshop-corpus.sha256`.
+  `xtask/photoshop-corpus.sha256`. `gimp/` has its own pin (`PHOTOCRAFT_CORPUS_GIMP_COMMIT`) and manifest
+  (`xtask/gimp-corpus.sha256`), fetched by `cargo xtask corpus --gimp`, so the two sets move independently.
 - **Bumping the pin:** in a PhotoCraft PR, set `PHOTOCRAFT_CORPUS_COMMIT` to the new commit here, then run
   `cargo xtask corpus --photoshop --update-manifest` and commit the manifest diff. Re-run the
   tests below and raise their floors if more files pass (see [Pinning](#pinning-workflow)).
@@ -117,6 +119,7 @@ There is one top-level folder per source, i.e. per application that authored the
 | Folder | Source | Files |
 |---|---|---:|
 | [`photoshop/`](#photoshop-photoshop-oracle-psds) | Adobe Photoshop 2026 (27.10), driven by [`tools/photoshop-oracles/`](tools/photoshop-oracles) | 258 |
+| [`gimp/`](#gimp-gimp-xcf-oracles) | GIMP 3.2.6, driven by [`tools/gimp-xcf/`](tools/gimp-xcf) | 28 |
 
 The repository also contains:
 
@@ -170,7 +173,7 @@ change behind a pin.
    `cargo xtask test-corpus --local`, which copies from this clone and runs the corpus tests (see
    [Local layout](#local-layout-authoring-clone-consuming-copy-local-mode)).
 4. **Refresh the manifest**, covering every folder:
-   `find photoshop -name '*.psd' | LC_ALL=C sort | xargs shasum -a 256 > SHA256SUMS`
+   `find photoshop gimp -type f \( -name '*.psd' -o -name '*.xcf' -o -name '*.png' \) | LC_ALL=C sort | xargs shasum -a 256 > SHA256SUMS`
 5. **Make one commit per batch**, with a message that names what changed and the application
    version.
 
@@ -274,7 +277,7 @@ above must be installed.
 ```sh
 tools/photoshop-oracles/generate.sh               # everything (a few minutes)
 tools/photoshop-oracles/generate.sh '^text/'      # or a subset, by regular expression on the path
-find photoshop -name '*.psd' | LC_ALL=C sort | xargs shasum -a 256 > SHA256SUMS
+find photoshop gimp -type f \( -name '*.psd' -o -name '*.xcf' -o -name '*.png' \) | LC_ALL=C sort | xargs shasum -a 256 > SHA256SUMS
 ```
 
 The script prints one line per file:
@@ -287,11 +290,49 @@ The output has the same content each time but is not identical byte for byte, be
 writes fresh document ids, timestamps and XMP. So regenerate only when the set itself changes,
 then follow the [pinning workflow](#pinning-workflow).
 
+## `gimp/`: GIMP XCF oracles
+
+14 small XCF files (40×30, the text one 160×60) written by **GIMP 3.2.6** itself through the
+Python generator in [`tools/gimp-xcf/`](tools/gimp-xcf), each saved next to GIMP's own merged
+rendering of the visible layers as a PNG (`<name>.png`), 28 files and 251 KB in all. PhotoCraft's
+XCF reader checks the layer data it reads against the procedural formulas the generator drew with,
+and its composite of each file against the PNG.
+
+| File | What it exercises |
+|---|---|
+| `layers-8bit` | three RGB layers: offsets (one off-canvas), opacity, Multiply and Screen, a hidden layer, lock alpha, a colour tag, 300 dpi, guides |
+| `groups` | a group with two children and a nested pass-through group, group opacity |
+| `mask` | a layer mask painted with a gradient, one applied and one disabled |
+| `gray16` | 16-bit grayscale, two layers, one with alpha |
+| `float-linear` | 32-bit float linear-light RGB, values above 1.0 |
+| `indexed` | a 16-colour indexed image with transparency |
+| `text` | a text layer (DejaVu Sans, referenced by name only) |
+| `channel` | an extra channel and a saved selection |
+| `legacy-modes` | Addition, Subtract, Divide, Dodge, Burn, Grain merge, HSV Hue, HSV Value, LCH Color, Hard light, Exclusion, Linear light |
+
+`layers-8bit`, `groups`, `mask`, `text` and `legacy-modes` also come as `<name>-perceptual.xcf`:
+the same image with every layer set to blend and composite in gamma-encoded RGB (GIMP's default is
+linear light for most modes), which is the space PhotoCraft composes in. The perceptual files must
+match PhotoCraft's composite closely; the default ones measure the known gap between the two.
+
+### How it was generated
+
+- `tools/gimp-xcf/generate.sh` runs GIMP headless (`-i -n`; the Flatpak `org.gimp.GIMP` by
+  default, `GIMP="<command>"` picks another build) with the Python-Fu batch interpreter, which
+  executes `xcf_fixtures.py` inside GIMP. No window opens and no preference is changed.
+- Every pixel is procedural: the formulas are in the script and mirrored by PhotoCraft's test.
+  Nothing is read from disk. The text layer uses the font GIMP's context defaults to (DejaVu
+  Sans), referenced by name only; its PNG oracle does not depend on the font being installed.
+- GIMP writes its own Exif into both files (dimensions, 300 dpi, and a small JPEG thumbnail in
+  the PNGs) and embeds no colour profile; the float file is linear light by its precision.
+- GIMP stamps a modification time into the PNGs, so regenerated files differ byte for byte.
+  Regenerate only when the set itself changes, then follow the [pinning workflow](#pinning-workflow).
+
 ## Provenance
 
 Everything here is original work by the PhotoCraft contributors. The files are generated from
-scratch by the scripts in `tools/`, with Adobe Photoshop used only as the authoring tool.
-Photoshop's output was observed clean-room: none of its code, presets, patterns, styles,
+scratch by the scripts in `tools/`, with Adobe Photoshop and GIMP used only as the authoring
+tools. Their output was observed clean-room: none of their code, presets, patterns, styles,
 contours, ICC profiles or other assets are included. Fonts are referenced by name only. The files
 contain no personal or private images and no copyrighted material we don't own.
 
@@ -344,7 +385,7 @@ PhotoCraft Corpus is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICE
 Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors. Required notices are in [NOTICE](NOTICE).
 
 This repository bundles no third-party assets. Every test file was generated from scratch by the
-scripts in [`tools/`](tools/), with Adobe Photoshop as the authoring tool (see
+scripts in [`tools/`](tools/), with Adobe Photoshop and GIMP as the authoring tools (see
 [Provenance](#provenance)). Fonts are referenced by name only.
 
 The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
